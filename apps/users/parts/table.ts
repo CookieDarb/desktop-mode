@@ -286,13 +286,48 @@ function buildActionsCell( row: UserListItem, cfg: ListConfig, actions: RowActio
 		cell.style.color = MUTED;
 		return cell;
 	}
+	const restColor = 'var( --os-ui-fg-muted, #50575e )';
+	const restBorder = 'var( --os-ui-border, #dcdcde )';
+	const restBg = 'var( --os-ui-surface, #fff )';
+
 	const mk = ( label: string, dashicon: string, fn: () => void ): HTMLElement => {
 		const btn = document.createElement( 'button' );
 		btn.type = 'button';
 		btn.title = label;
 		btn.setAttribute( 'aria-label', label );
-		btn.style.cssText =
-			'appearance:none;border:1px solid var(--os-ui-border, #dcdcde);background:var(--os-ui-btn-bg, #fff);color:inherit;padding:4px 6px;border-radius:4px;cursor:pointer;line-height:1;';
+		btn.setAttribute( 'data-noclick', '' );
+
+		const applyRest = (): void => {
+			btn.style.background = restBg;
+			btn.style.color = restColor;
+			btn.style.borderColor = restBorder;
+		};
+		const applyHover = (): void => {
+			btn.style.background = 'var( --os-ui-hover, #f0f0f1 )';
+			btn.style.color = 'var( --os-ui-fg, #1d2327 )';
+			btn.style.borderColor = 'var( --os-ui-border-strong, #8c8f94 )';
+		};
+
+		btn.style.cssText = [
+			'appearance:none',
+			'border:1px solid ' + restBorder,
+			'background:' + restBg,
+			'color:' + restColor,
+			'padding:4px 6px',
+			'border-radius:4px',
+			'cursor:pointer',
+			'line-height:1',
+			'display:inline-flex',
+			'align-items:center',
+			'justify-content:center',
+			'transition:background-color 120ms ease, color 120ms ease, border-color 120ms ease',
+		].join( ';' );
+
+		btn.addEventListener( 'mouseenter', applyHover );
+		btn.addEventListener( 'mouseleave', applyRest );
+		btn.addEventListener( 'focus', applyHover );
+		btn.addEventListener( 'blur', applyRest );
+
 		const ic = document.createElement( 'os-icon' );
 		ic.setAttribute( 'name', dashicon );
 		ic.setAttribute( 'size', '14' );
