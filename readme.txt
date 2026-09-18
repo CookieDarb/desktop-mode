@@ -4,7 +4,7 @@ Tags: admin, dashboard, desktop, productivity, ai
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.9
+Stable tag: 1.1.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -178,6 +178,25 @@ The **Inkfall** game's word list (`assets/games/inkfall/words.txt`) is generated
 * **[LDNOOBW English list](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words)** (CC-BY 4.0) — used as an exclusion filter.
 
 == Changelog ==
+
+= 1.1.10 =
+* Fix: drop a plugin zip into Core's upload box, not the Media Library dialog
+* Multisite: Open sites without OpenStation in a browser tab
+* Preferences: Open from the network admin shell
+* Network app: Open from a desktop icon instead of a dock tile
+* Highlight the best matching control in Preferences search
+* Fix: External apps work on activation without needing to refresh
+* Multisite: Drop Site Spaces from the Network Admin tile comments
+* Multisite: Route My Sites and network Sites links out of the window
+* Remove AI comment scoring from the shell
+* Add responsive grid, app frame, and resizable split layouts
+* Default theme: toning down accent
+* Separate hidden columns for posts and pages
+* Fix: keep metabox screens two-column down to 796px
+* Overview: Merge the two edit controls on desktop tiles
+* Plugins: Add AllTerrain MAIA to the Featured tab
+* Ask one optional question when OpenStation is deactivated
+* Plugins: Add a Plugin File Editor tab to the native Plugins window
 
 = 1.1.9 =
 * Add saved Plugins table view and fix preserved table rendering
