@@ -296,6 +296,10 @@ return App::define( 'desktop-mode-plugins' )
 				// The deactivation feedback dialog's lazy bundle and
 				// route; `null` when the feature is filtered off.
 				'deactivationFeedback' => openstation_deactivation_feedback_app_config(),
+				// Core's Plugin File Editor stays Core's screen: a tab
+				// opens it as its own window, offered only where Core
+				// lists it under Plugins (`''` everywhere else).
+				'editorUrl'          => openstation_plugins_window_editor_url(),
 			);
 		}
 	)

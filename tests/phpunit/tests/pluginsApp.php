@@ -119,7 +119,7 @@ class Tests_OpenStation_PluginsApp extends WP_UnitTestCase {
 		// per-viewer half (caps, nonces, the auto-updates gate).
 		$config = $manifest['config'];
 		$this->assertSame(
-			array( 'ajaxUrl', 'selfPluginFile', 'adminUrl', 'ajaxNonce', 'updatesNonce', 'caps', 'autoUpdatesEnabled', 'deactivationFeedback' ),
+			array( 'ajaxUrl', 'selfPluginFile', 'adminUrl', 'ajaxNonce', 'updatesNonce', 'caps', 'autoUpdatesEnabled', 'deactivationFeedback', 'editorUrl' ),
 			array_keys( $config )
 		);
 		// The deactivation dialog's lazy bundle and route, so a

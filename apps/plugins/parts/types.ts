@@ -57,6 +57,12 @@ export interface PluginsExtra {
 		styleUrl: string;
 		restUrl: string;
 	} | null;
+	/**
+	 * Core's Plugin File Editor (`plugin-editor.php`), opened as its own
+	 * window from the editor tab. `''` unless Core lists it under Plugins
+	 * for this viewer (single site, classic theme, `edit_plugins`).
+	 */
+	editorUrl: string;
 }
 
 export type Ctx = ViewContext< AppState, AppData >;
