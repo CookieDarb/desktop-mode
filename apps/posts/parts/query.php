@@ -384,4 +384,3 @@ function openstation_posts_app_restore( Os $os, array $args, $type ) {
 		);
 	}
 }
-
