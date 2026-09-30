@@ -48,6 +48,7 @@ The full surface is documented in [`javascript-reference.md`](./javascript-refer
 | `windowManager` | `WindowManager` instance | Stable |
 | `openWindow` | `( id: string, opts?: { source?: string } ) => boolean` | Stable |
 | `openNewWindow` | `( id: string, opts?: { source?: string } ) => boolean` *(always spawns a new instance)* | Stable |
+| `embedAdminPage` | `( host: HTMLElement, url: string, opts?: { windowId?: string } ) => () => void` *(a wp-admin screen inside a native window's body)* | Stable |
 | `registerWindow` | `( def: NativeWindowDef ) => Promise<Window>` | Stable *(returns a `Promise`)* |
 | `cloneTemplate` | `( templateOrId: string \| HTMLTemplateElement ) => DocumentFragment` | Stable |
 | `onWindow` | `( id, handlers, opts? ) => () => void` | Stable |
@@ -360,3 +361,9 @@ When a status changes (Experimental → Stable, or anything → removed), update
 | `os-grid` extensions | `min-item-width`, child `col-span` / `row-span` (1–12) | Stable |
 
 See [app layout recipes](./examples/app-layouts.md) for attributes, sizing and examples.
+
+### Form component types
+
+The `openstation` package exports `OsForm`, `OsSwitch` and `OsTagInput`, including
+their DOM methods and property types. Use `import type` when only typing elements
+already loaded by the runtime. See [named form fields](components-reference.md#named-fields-in-os-form).
