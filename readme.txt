@@ -4,7 +4,7 @@ Tags: admin, dashboard, desktop, productivity, ai
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.11
+Stable tag: 1.1.12
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -187,6 +187,28 @@ The **Inkfall** game's word list (`assets/games/inkfall/words.txt`) is generated
 * **[LDNOOBW English list](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words)** (CC-BY 4.0) — used as an exclusion filter.
 
 == Changelog ==
+
+= 1.1.12 =
+* AI: repair the tl;dr and SEO Medic prompts, and drop dated prompting patterns
+* Agents: give Comment Concierge its thread tool back, clean up faces on a Core user delete, and fix AI docs drift
+* Agents: align get-post, get-media and the per-agent invoke gate with Core's read rules
+* WP Explorer: Drag photos and posts into an editor window again
+* Workspaces: Give each launch entry its own window back
+* Workspaces: Open the Publishing desk with the draft as the main window
+* Agents: show the copied prompt in Describe, and let the trail jump to any step
+* AI: default the output-token ceiling, fail truncated turns, and stop stuck tool loops
+* Site assistant: Open from the dock and always offer Ask AI
+* Agents: keep the brief's focus ring inside the wizard pane
+* Windows: Decode HTML entities in titles, names and user names across the shell, and fix the Orders list columns
+* Add WooCommerce order details to window titles
+* WP Explorer: List every attached image under Attached media
+* Windows: Rename 'Open in browser tab' to 'Open in classic wp-admin' and explain the ⋯ menu
+* Agents: Decode HTML entities in agent names
+* WP Explorer: Show who is editing a locked post
+* Windows: Keep a lone less-than sign in titles, names, Trash and comment excerpts
+* Feedback: Ask active users how OpenStation is going, once
+* First run: New users get a short guided tour of the desktop
+* First run: After installing, the Plugins screen and the Dashboard now show how to turn OpenStation on
 
 = 1.1.11 =
 * Overview: Replace the dock tile icon with the brand widgets glyph
