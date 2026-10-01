@@ -1216,6 +1216,34 @@ Return `false` to suppress the dialog — useful for managed-host onboarding flo
 
 ---
 
+### `openstation_show_activation_nudge` — Stable
+
+Decides whether the activation nudge — a dismissible admin notice on the Dashboard and Plugins screens (and their network twins) saying "OpenStation is installed but not turned on", with **Turn on OpenStation** (the portal link) and **Not now** — renders for the current user on the current request.
+
+```php
+apply_filters( 'openstation_show_activation_nudge', bool $show, int $user_id );
+```
+
+The filter only fires after every built-in gate has passed: the user can `activate_plugins`, does not have OpenStation on, nobody on the site has ever enabled it (`openstation_first_enabled_at` is absent), the install stamp is real (`via: activation`, never a backfill) and under 14 days old, the screen is one of the four, the request is not chromeless, the user has not clicked **Not now** (the `activation-nudge` slug in `desktop_mode_seen_intros`, wiped by "Reset what's-new dialogs" like every other intro), and the welcome dialog is not rendering on the same request. The welcome dialog is the first touch; this is the second, quieter one, shown only once the dialog is out of the way (dismissed, or switched off by `openstation_show_welcome_dialog`), and both stop the moment anyone on the site enables.
+
+Return `false` to suppress it, e.g. from a managed-host onboarding flow.
+
+---
+
+### `openstation_show_shell_tour` — Stable
+
+Decides whether the first-boot shell tour — five coachmarks: where the menus are, how to change the layout, then open a window, snap it, press ⌘K — is offered to a user. Shipped to the shell as `config.shellTour`.
+
+```php
+apply_filters( 'openstation_show_shell_tour', bool $offer, int $user_id );
+```
+
+Whether the user already took or skipped it is not this filter's question: that is the `shell-tour` slug in `desktop_mode_seen_intros`, which the shell reads from `config.seenIntros`. Existing users are marked seen by migration 10 on update, so only a genuinely new user boots into the tour; "Reset what's-new dialogs" and the **Take the tour** button in OpenStation Preferences → Features replay it regardless of this filter's boot-time answer — the filter gates the automatic first-boot start, not the explicit request. It does gate the relaunch icon a skipped tour leaves on the desk: a site that switched the tour off offers no way back into it.
+
+Return `false` to switch the automatic tour off site-wide or for a role.
+
+---
+
 ### `openstation_deactivation_feedback_enabled` — Experimental
 
 Whether the deactivation feedback dialog exists on this site. It gates all three surfaces at once: the bundle on `plugins.php` (classic, chromeless and network admin), the native Plugins app's config block, and the `POST /desktop-mode/v1/feedback/deactivation` route, which answers `403` when this returns `false`.

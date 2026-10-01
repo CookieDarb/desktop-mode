@@ -195,9 +195,10 @@ require_once OPENSTATION_DIR . 'includes/living-tree/bootstrap.php';
 require_once OPENSTATION_DIR . 'includes/games/bootstrap.php';
 require_once OPENSTATION_DIR . 'includes/agents/bootstrap.php';
 require_once OPENSTATION_DIR . 'includes/network/bootstrap.php';
-// First run: the install / first-enable stamps. Loads on every request
-// because they are written from the AJAX toggle, the portal and the
-// activation hook, none of them an admin render.
+// First run: install / first-enable stamps, the "Turn on" plugin row
+// action, the activation nudge and the shell tour's gate. Loads on
+// every request because the stamps are written from the AJAX toggle,
+// the portal and the activation hook, none of them an admin render.
 require_once OPENSTATION_DIR . 'includes/first-run/bootstrap.php';
 // Deactivation feedback: the dialog on the Plugins screen and the
 // REST route it posts to. Unconditional so the route registers on
