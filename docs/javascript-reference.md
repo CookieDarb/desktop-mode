@@ -964,7 +964,7 @@ manager.getActiveDesktop(): Desktop;
 manager.getActiveDesktopId(): string;
 manager.getPrimaryDesktopId(): string;
 manager.createDesktop(): Desktop;
-manager.switchDesktop( id: string ): void;
+manager.switchDesktop( id: string, opts?: { direction?: 'next' | 'prev'; skipFocus?: boolean } ): void;
 manager.closeDesktop( id: string ): void;
 manager.moveWindowToDesktop( windowId: string, desktopId: string ): boolean;
 ```
@@ -991,6 +991,8 @@ manager.moveWindowToDesktop( windowId: string, desktopId: string ): boolean;
 > **`open()` requires a config object.** Passing a URL string used to silently produce a window stuck on a loading spinner with no error in the console. The manager throws `TypeError` at the call site if `config` isn't an object, or if `id` / `url` / `title` are missing or wrong-typed. Build the config; don't shorthand it.
 
 **`focus()` takes a window or an id.** `focus( 'jorvy' )` and `focus( someWindow )` are equivalent. An id with no open window is a silent no-op — a window closing between the moment you captured its id and the moment you ask for focus is a routine race, not an error. Anything that is neither a window nor a string is refused with a `console.warn` and changes nothing.
+
+**`focus()` on a window that lives on another desktop switches to that desktop first**, so focus never lands on a window the user cannot see. `HOOKS.DESKTOP_SWITCHED` fires before the window's own `WINDOW_FOCUSED`. `open()` never does this: a window opened onto an inactive desktop (session restore, a lazily loaded native window) joins it without taking focus, and the active desktop stays where it is.
 
 #### Child windows — Stable
 
@@ -1838,6 +1840,8 @@ Lifecycle hooks fire on each operation: `HOOKS.DESKTOP_CREATED`, `HOOKS.DESKTOP_
 `renameDesktop()` trims the label and caps it at **64 characters**, matching the session sanitizer, and returns `false` without firing the hook when the id is unknown or the name is blank or unchanged. It persists through the normal session save. Users reach it from the Workspaces top bar by double-clicking a tile's name, which edits it in place (Enter commits, Escape reverts, blur commits). A single click on the name still switches to that desk, one double-click interval later; the rest of the tile switches at once.
 
 Switching desktops shows the new desktop's name over the desk for a beat (`.os-desktop-name-hud`), except when the switch is made from overview — the top bar there already labels every desktop.
+
+Outside overview, `switchDesktop()` also focuses the topmost non-minimized window on the desktop it lands on. Pass `{ skipFocus: true }` when you are about to focus a specific window yourself, so subscribers don't see a focus on some other window first; pass `{ direction: 'next' | 'prev' }` to play the slide animation.
 
 ##### Primary desktop — `getPrimaryDesktopId()`
 
