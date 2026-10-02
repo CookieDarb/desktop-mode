@@ -1441,7 +1441,27 @@ export class WindowManager {
 		// practice. No-op for iframe windows.
 		win.hydrateNative();
 
-		this.focus( win );
+		// A window opened onto another desktop (session restore, or a
+		// native window whose lazy bundle resolved after the user moved
+		// on) joins the stack without taking focus. Focusing it would
+		// switch desktops, so a restore that recreates windows on every
+		// desktop would hop between them and land wherever the last
+		// window lived. It slots in under the active desktop's windows
+		// so the stack top, which `getFocused()` reads, stays the
+		// window the user is looking at.
+		const onOtherDesktop = ( w: Window ): boolean =>
+			( w.config.desktopId || this._activeDesktopId ) !== this._activeDesktopId;
+		if ( onOtherDesktop( win ) ) {
+			this._stack.splice( this._stack.indexOf( win ), 1 );
+			let slot = this._stack.length;
+			while ( slot > 0 && ! onOtherDesktop( this._stack[ slot - 1 ] ) ) {
+				slot--;
+			}
+			this._stack.splice( slot, 0, win );
+			this._stack.forEach( ( w, i ) => w.setZIndex( BASE_Z_INDEX + i ) );
+		} else {
+			this.focus( win );
+		}
 
 		const openedDetail = {
 			windowId: win.id,

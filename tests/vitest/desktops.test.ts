@@ -10,9 +10,11 @@
  *   - the os.os.* action firings
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { restoreSession } from '../../src/boot/session';
 import { WindowManager } from '../../src/window-manager';
 import { closeDesktop } from '../../src/window-manager/desktops';
 import { HOOKS } from '../../src/hooks';
+import type { DesktopConfig, Session } from '../../src/types';
 import {
 	clearHooksStub,
 	installHooksStub,
@@ -1235,5 +1237,57 @@ describe( 'WindowManager — cross-desktop window focus', () => {
 		expect( manager.getActiveDesktopId() ).toBe( second.id );
 		expect( manager._overviewActive ).toBe( true );
 		expect( win2.isFocused() ).toBe( true );
+	} );
+
+	test( 'session restore stays on the saved active desktop', async () => {
+		// The user left Desktop 1 empty and active, so the saved focus
+		// is the stack top on Desktop 2.
+		const session: Session = {
+			windows: [
+				{
+					id: 'pages',
+					baseId: 'pages',
+					desktopId: 'desktop-2',
+					url: 'http://example.test/wp-admin/edit.php?post_type=page',
+					title: 'Pages',
+					icon: 'dashicons-admin-page',
+					state: 'normal',
+					x: 100,
+					y: 80,
+					width: 900,
+					height: 600,
+				},
+			],
+			desktops: [
+				{ id: 'desktop-1', label: 'Desktop 1' },
+				{ id: 'desktop-2', label: 'Desktop 2' },
+			],
+			activeDesktop: 'desktop-1',
+			focused: 'pages',
+			updated: 123,
+		};
+		const switched = recordActions( hooks, [ HOOKS.DESKTOP_SWITCHED ] );
+
+		await restoreSession(
+			manager,
+			{ adminUrl: 'http://example.test/wp-admin/', dockItems: [], session } as unknown as DesktopConfig,
+			desktopArea,
+		);
+
+		expect( manager.getActiveDesktopId() ).toBe( 'desktop-1' );
+		expect( manager.getById( 'pages' )?.element.style.display ).toBe( 'none' );
+		expect( switched ).toHaveLength( 0 );
+	} );
+
+	test( 'a window opened onto another desktop does not take focus', async () => {
+		const second = manager.createDesktop();
+		const win1 = await manager.open( openConfig( 'win1' ) );
+
+		const far = await manager.open( { ...openConfig( 'far' ), desktopId: second.id } );
+
+		expect( manager.getActiveDesktopId() ).toBe( 'desktop-1' );
+		expect( manager.getFocused() ).toBe( win1 );
+		expect( win1.isFocused() ).toBe( true );
+		expect( far.isFocused() ).toBe( false );
 	} );
 } );
