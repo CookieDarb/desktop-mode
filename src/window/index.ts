@@ -19,7 +19,8 @@ import { getSyntheticIframe } from './../connection';
 import { HOOKS, applyFilters, doAction } from './../hooks';
 import { isMobileStamped } from '../mode/stamp';
 import { workAreaRectOf } from '../work-area';
-import { __, sprintf } from './../i18n';
+import { __, _x, sprintf } from './../i18n';
+import { attachTooltip } from '../ui/components/os-tooltip/os-tooltip';
 import {
 	addParentSubscriber,
 	clearWindowChannels,
@@ -128,6 +129,7 @@ import {
 import type { PanelTabEntry } from './tabs';
 import {
 	closeActionsMenu,
+	describeActionsMenu,
 	flipMenuItemCheckOptimistically,
 	openActionsMenu,
 	refreshStartupCheckState,
@@ -210,6 +212,15 @@ export class Window {
 	 */
 	public iframe: HTMLIFrameElement | null;
 	public state: WindowState = 'normal';
+
+	/**
+	 * Set when an explicit `os-title-change` message tells us what
+	 * the title should be, so the `adoptPageTitle` heuristic doesn't
+	 * overwrite it.
+	 *
+	 * @internal
+	 */
+	public _hasExplicitTitle = false;
 
 	/** @internal */
 	public _titleBar: HTMLElement;
@@ -1239,6 +1250,22 @@ export class Window {
 				e.stopPropagation();
 				toggleActionsMenu( this );
 			} );
+			// A bare ⋯ glyph does not say what is behind it, so hovering
+			// it names the menu and lists its rows. Resolved on every
+			// show: plugin rows can come and go while the window is open.
+			attachTooltip( menuBtn, () => ( {
+				heading: __( 'Window actions' ),
+				text: describeActionsMenu( this ).reduce( ( list, label ) =>
+					list
+						? sprintf(
+							/* translators: 1: a list of menu item names so far, 2: the next name. */
+							_x( '%1$s, %2$s', 'list of menu item names' ),
+							list,
+							label,
+						)
+						: label,
+				'' ),
+			} ) );
 			const openAnother = menuPanel.querySelector(
 				'.os-window__menu-item--open-another',
 			);
@@ -1263,7 +1290,7 @@ export class Window {
 					this.onOpenInNewWindow?.( this );
 				} );
 			}
-			// "Reload" + "Open in browser tab" moved here from the
+			// "Reload" + "Open in classic wp-admin" moved here from the
 			// title-bar controls cluster. Both call straight
 			// into the existing `Window` API — no new manager wiring
 			// needed. Click closes the menu first so the iframe
@@ -1805,6 +1832,33 @@ export class Window {
 	}
 
 	/**
+	 * Snap the window to `zone` the way a drag to the edge does:
+	 * remember the floating rect, then {@link applySnap}.
+	 *
+	 * `applySnap` alone is the geometry, which is right for a session
+	 * restore (the floating rect was saved in the session that snapped
+	 * it). A snap that happens NOW, to a floating window, owes the user
+	 * the way back: dragging the window off the edge restores from
+	 * `_savedGeometry`, and without it the window comes back at a
+	 * default size instead of the one they had.
+	 *
+	 * Saved only on the way out of `normal`, the same rule as maximize:
+	 * from any other state the rect on screen is that state's, not the
+	 * user's.
+	 */
+	public snapTo( zone: 'left' | 'right' ): void {
+		if ( this.state === 'normal' ) {
+			this._savedGeometry = {
+				x: this.element.offsetLeft,
+				y: this.element.offsetTop,
+				width: this.element.offsetWidth,
+				height: this.element.offsetHeight,
+			};
+		}
+		this.applySnap( zone );
+	}
+
+	/**
 	 * Apply the snap-zone visuals (state class + inline geometry). Does
 	 * NOT mutate `state`, save geometry, emit a change event, or fire
 	 * any action — callers own all of those side-effects so the same
@@ -1836,6 +1890,48 @@ export class Window {
 		this.element.style.width = `${ halfW }px`;
 		this.element.style.height = `${ area.height }px`;
 		return true;
+	}
+
+	/**
+	 * Float a snapped window: drop the snapped state AND give the window
+	 * a floating rect again.
+	 *
+	 * The inverse of {@link applySnap}, and deliberately more than a
+	 * state reset: a window left sitting at the half-screen geometry
+	 * still looks snapped, so anything meaning to demonstrate a snap
+	 * would have nothing to show. The shell tour calls this before its
+	 * snap card when the window is already against that edge.
+	 *
+	 * Sizes from `_savedGeometry` when the window has a floating rect to
+	 * go back to, else from the same proportions the drag-to-float path
+	 * uses (`pointer.ts`), so a window floated here and one the user
+	 * dragged out of a split land at the same size.
+	 *
+	 * A no-op unless the window is snapped.
+	 */
+	public unsnap(): void {
+		if ( ! this.isSnapped() ) {
+			return;
+		}
+		this.element.classList.remove(
+			'os-window--snapped-left',
+			'os-window--snapped-right',
+		);
+		const parent = this.element.parentElement;
+		if ( parent ) {
+			const area = workAreaRectOf( parent );
+			const saved = this._savedGeometry;
+			const width = saved?.width ?? Math.min( 960, Math.round( area.width * 0.6 ) );
+			const height = saved?.height ?? Math.min( 640, Math.round( area.height * 0.7 ) );
+			const x = saved?.x ?? area.x + Math.round( ( area.width - width ) / 2 );
+			const y = saved?.y ?? area.y + Math.round( ( area.height - height ) / 2 );
+			this.element.style.left = `${ x }px`;
+			this.element.style.top = `${ y }px`;
+			this.element.style.width = `${ width }px`;
+			this.element.style.height = `${ height }px`;
+		}
+		this.state = 'normal';
+		this._emitChange( 'state' );
 	}
 
 	/**

@@ -160,6 +160,7 @@ import {
 } from './bug-report';
 import { ensureDeferredStyle } from './deferred-styles';
 import { showToast, type ToastOptions } from './toast';
+import { restErrorFromResponse } from './core/api-client';
 import { __, sprintf } from './i18n';
 import {
 	bootstrapPwa,
@@ -183,6 +184,8 @@ import {
 	registerPalette,
 	openPaletteOnly,
 	installPaletteShortcut,
+	listPalettes,
+	notifyPaletteVisibility,
 	type Palette,
 } from './palette-registry';
 import { type SharedStore } from './shared-store';
@@ -236,7 +239,6 @@ import {
 	MIO_TILE_ID,
 	type MioApi,
 } from './mio/controller';
-import { mountNotch } from './notch';
 import { installAdminBarHeight } from './admin-bar-height';
 import { installDockBehavior } from './dock-behavior';
 import {
@@ -275,6 +277,8 @@ import { all as listWallpaperDefs } from './wallpapers/registry';
 import { getAccents } from './settings/constants';
 import type { WorkspacePreset } from './workspaces/types';
 import {
+	ASSISTANT_TILE_ID,
+	OS_ASSISTANT_ICON,
 	OS_OVERVIEW_ICON,
 	OS_SYSTEM_ICON,
 	OVERVIEW_TILE_ID,
@@ -284,6 +288,9 @@ import {
 import { toggleFullscreen } from './fullscreen';
 import { openShortcutsWith, SHORTCUTS_WINDOW_ID } from './shortcuts';
 import { maybeShowRebrandNotice } from './rebrand-notice';
+import { installShellTour } from './shell-tour/loader';
+import { spendMenuRefresh } from './settings/spend-menu-refresh';
+import { maybeAskForUsageFeedback } from './usage-feedback/index';
 import { osConfirm } from './os-confirm';
 import { preloadShellOverlays } from './shell-overlays/loader';
 import { renderIcon } from './icon';
@@ -327,6 +334,7 @@ import {
 import { openCreateFolderDialog } from './desktop-files/create-folder-dialog';
 import { openUrlDialog } from './desktop-files/overlays-loader';
 import { installFileDropSentinel } from './os-file-drop/sentinel';
+import { hydrateScriptDeps } from './script-dep-payloads';
 import type {
 	DesktopConfig,
 	DesktopWallpaperServerEntry,
@@ -671,6 +679,14 @@ export interface OpenStationPublicApi {
 	 * `openstation_register_game()`.
 	 */
 	games: GamesApi;
+	/**
+	 * The deactivation feedback dialog. Published by the lazy
+	 * `deactivation-feedback[.min].js` bundle once it has loaded —
+	 * absent until then. The native Plugins app is its one in-shell
+	 * caller; the classic `plugins.php` runs the same bundle without
+	 * the shell.
+	 */
+	deactivationFeedback?: import( './deactivation-feedback' ).DeactivationFeedbackApi;
 	/** Convenience: register a widget via `os.widgets` filter. */
 	registerWidget: ( def: import( './widgets/types' ).WidgetDef ) => void;
 	/**
@@ -748,6 +764,19 @@ export interface OpenStationPublicApi {
 	 * behave like iframe windows do: every "+" yields a duplicate.
 	 */
 	openNewWindow: ( id: string, opts?: { source?: string } ) => boolean;
+	/**
+	 * Mount a chromeless admin page inside an element of a native
+	 * window's body, and return the teardown — a tab whose page is one
+	 * of wp-admin's own, shown in place rather than as a second window.
+	 * Not an iframe window: title adoption, the preview and revisions
+	 * buttons and the close-time unsaved-changes query all key off
+	 * `Window.iframe`, and an embedded page has none of them.
+	 */
+	embedAdminPage: (
+		host: HTMLElement,
+		url: string,
+		opts?: { windowId?: string },
+	) => () => void;
 	/**
 	 * Load a registered native window's bundle without opening the
 	 * window.
@@ -840,7 +869,16 @@ export interface OpenStationPublicApi {
 	fetch: (
 		input: RequestInfo | URL,
 		requestInit?: RequestInit,
-		opts?: { windowId?: string; window?: DesktopWindow; silent?: boolean },
+		opts?: {
+			windowId?: string;
+			window?: DesktopWindow;
+			silent?: boolean;
+			/**
+			 * Free-form attribution tag published on the activity bus
+			 * as `os/request-settled` (e.g. `'my-plugin/foo'`).
+			 */
+			source?: string;
+		},
 	) => Promise< Response >;
 	/**
 	 * Clone a `<template>` element's contents into a fresh
@@ -2186,6 +2224,9 @@ function init(): void {
 	if ( ! config ) {
 		return;
 	}
+	// Entries carry dependency handles; put the payloads back before
+	// any loader reads them (GH#892).
+	hydrateScriptDeps( config );
 
 	const desktopArea = document.getElementById( 'os-area' );
 	if ( ! desktopArea ) {
@@ -2372,6 +2413,10 @@ function init(): void {
 			// configured; the Commands palette works regardless. Read live so
 			// connecting a provider or flipping the "AI assistant" toggle takes
 			// effect on the next open — no reload.
+			isAiSupported: () => config.aiAssistant?.available === true,
+			// Loose on purpose: `wp_localize_script` sends this top-level
+			// boolean as "1" / "".
+			canConnectProvider: () => Boolean( config.currentUserIsAdmin ),
 			isAiAvailable: () =>
 				config.aiAssistant?.available === true &&
 				config.aiAssistant?.assistantProviderConfigured === true,
@@ -2730,12 +2775,20 @@ function init(): void {
 		captureAppearance: currentWorkspaceLook,
 	} );
 
-	/** The `+`: open the wizard to make a desk. */
-	const createWorkspaceWithWizard = (): void => {
+	/**
+	 * The `+`: open the wizard over the desk it is about to dress.
+	 *
+	 * The desk exists before the wizard does, so the user configures a
+	 * canvas they can see rather than one they are promised. The `+`
+	 * makes it and lands on it, and hands the id here; a programmatic
+	 * caller has done neither, so make it here instead.
+	 */
+	const createWorkspaceWithWizard = ( desktopId?: string ): void => {
 		if ( ! workspaceDeps ) {
 			return;
 		}
 		const deps = workspaceDeps;
+		const target = desktopId ?? createWorkspace( deps ).id;
 		openWorkspaceWizard( {
 			mode: 'create',
 			...wizardWorld( deps ),
@@ -2745,11 +2798,17 @@ function init(): void {
 				// would have from the old dropdown. Anything customized
 				// carries its own profile; a blank desk carries none.
 				createWorkspace( deps, {
+					desktopId: target,
 					label: result.label || undefined,
 					...( result.preset
 						? { preset: result.preset }
 						: { profile: result.profile ?? undefined } ),
 				} );
+				// The desk is already the active one, so the switch that
+				// normally triggers provisioning is a no-op — a template
+				// would land with its look and none of its windows.
+				applyWorkspaceViewForMode( deps, target );
+				provisionWorkspaceForMode( deps, target );
 			},
 		} );
 	};
@@ -2901,6 +2960,7 @@ function init(): void {
 	bindNativeUrlRemap( {
 		getSnapshot: () => osSettings.getOsSettingsSnapshot(),
 		openById: ( id, opts ) => nativeWindows.openById( id, opts ),
+		openNewById: ( id, opts ) => nativeWindows.openNewById( id, opts ),
 		adminUrl: config.adminUrl,
 	} );
 
@@ -3268,15 +3328,6 @@ function init(): void {
 			},
 		} );
 
-		// The notch — the site assistant's front door, and the shell's
-		// place to speak from. Deliberately not a dock tile: the rail
-		// is a list of apps, and "what is going on with this site?" is
-		// not one of them. Mounted on the shell root rather than the
-		// desk area so it never enters the work-area calculation.
-		mountNotch( shellEl, () => {
-			document.dispatchEvent( new CustomEvent( 'os-open-ai' ) );
-		} );
-
 		// ---- Workspaces ------------------------------------------
 		// A desktop plus the answer to what it is FOR. The deps bag is
 		// built here because it is the first point where all four
@@ -3527,6 +3578,53 @@ function init(): void {
 		} );
 	}
 
+	/** The Desktop layout section in Preferences, the tour's deep-link target. */
+	const LAYOUT_SECTION_ID = 'os-settings-layout';
+
+	/**
+	 * How long {@link revealSettingsSection} waits for its section. A
+	 * cold Preferences open is two lazy bundles and a request, so the
+	 * wait is the network's, and has to outlast ordinary hosting.
+	 */
+	const SETTINGS_SECTION_WAIT_MS = 8000;
+
+	function visibleSettingsSection( sectionId: string ): HTMLElement | null {
+		const section = document.getElementById( sectionId );
+		return section && ! section.closest( '[hidden]' ) ? section : null;
+	}
+
+	/**
+	 * Scroll a Preferences section into view once the app has painted it.
+	 *
+	 * `openOsSettings()` returns before the window body exists on a fresh
+	 * open, and before the tab strip has revealed the new panel on an
+	 * already-open one, so the target is either absent or still inside a
+	 * `hidden` pane for a while. Poll until it is neither, then give up
+	 * quietly: the page is already right, so the cost of losing the race
+	 * is the user scrolling to the section themselves.
+	 *
+	 * The wait is a deadline rather than a count of frames, which was
+	 * one second on a 60 Hz screen and half that on a 120 Hz one: less
+	 * than the request a cold open makes on an ordinary host.
+	 */
+	function revealSettingsSection(
+		sectionId: string,
+		deadline = performance.now() + SETTINGS_SECTION_WAIT_MS,
+	): void {
+		const section = visibleSettingsSection( sectionId );
+		if ( section ) {
+			// Instant, not smooth: the shell tour anchors a coachmark to
+			// this section, and the coachmark positions once when its
+			// anchor is set rather than following a scroll. The settings
+			// search scrolls its own match the same way.
+			section.scrollIntoView( { block: 'start', behavior: 'instant' } );
+			return;
+		}
+		if ( performance.now() < deadline ) {
+			requestAnimationFrame( () => revealSettingsSection( sectionId, deadline ) );
+		}
+	}
+
 	/**
 	 * Public OS Settings opener. Routes through the same
 	 * `manager.open()` call the system tile uses so a window
@@ -3619,21 +3717,13 @@ function init(): void {
 			: manager.open( bugReportConfig ) );
 	}
 
-	// Admin-bar "Report a bug" button. Inline JS in
-	// `assets/js/admin-bar.js` dispatches the event; the shell
-	// answers here, decoupled from the early-running admin-bar IIFE.
-	document.addEventListener( 'os-open-bug-report', () => {
-		openBugReport();
-	} );
-
 	if ( layoutDispatcher ) {
-		// Bug Report has no tile of its own anymore — it is a row in
-		// the System menu. `openBugReport` is still the one opener,
-		// reached from there and from the `os-open-bug-report` event.
+		// Bug Report has no tile of its own — it is a row in the
+		// System menu, and `openBugReport` is its one opener.
 
-		// Exit OpenStation tile — last on the core rail so users have
-		// a discoverable in-shell way out, complementing the admin-bar
-		// "Switch to Classic Admin" toggle. Reuses the existing
+		// Exit OpenStation tile — last on the core rail, and the only
+		// way out of the shell: the admin bar carries no OpenStation
+		// nodes while the desktop is up. Reuses the existing
 		// save-openstation AJAX endpoint via the
 		// `window.openStationAdminBar` global; no new PHP surface.
 		layoutDispatcher.appendSystemTile( getExitOpenStationTileDef() );
@@ -3648,6 +3738,22 @@ function init(): void {
 				layoutDispatcher.appendSystemTile( networkTile );
 			}
 		}
+
+		// Site assistant tile — the pointer's way into the ⌘K overlay.
+		// It leads the trailing cluster. `os-open-ai` rather than
+		// `aiAssistant.open()` so another open palette is dismissed
+		// first, the same as the keyboard shortcut.
+		layoutDispatcher.appendSystemTile( {
+			id: ASSISTANT_TILE_ID,
+			title: __( 'Site assistant' ),
+			icon: OS_ASSISTANT_ICON,
+			navKind: 'control',
+			placeable: true,
+			order: SYSTEM_TILE_ORDER.assistant,
+			onOpen: () => {
+				document.dispatchEvent( new CustomEvent( 'os-open-ai' ) );
+			},
+		} );
 
 		// Mio tile — one of OpenStation's controls, so it rides the
 		// dock's trailing cluster rather than sitting among the apps.
@@ -3677,12 +3783,13 @@ function init(): void {
 			},
 		} );
 
-		// Overview tile — the same surface ArrowUp toggles. A tile for
-		// it because the gesture is undiscoverable: a shortcut nobody
-		// pressed is a feature nobody has.
+		// Workspaces tile — the same surface ArrowUp toggles. A tile
+		// for it because the gesture is undiscoverable: a shortcut
+		// nobody pressed is a feature nobody has. The id stays
+		// `os-overview`: it keys visibility overrides in Preferences.
 		layoutDispatcher.appendSystemTile( {
 			id: OVERVIEW_TILE_ID,
-			title: 'Overview',
+			title: 'Workspaces',
 			icon: OS_OVERVIEW_ICON,
 			navKind: 'control',
 			placeable: true,
@@ -3981,7 +4088,7 @@ function init(): void {
 				{ source: 'desktop-mode/default-window' },
 			);
 			if ( ! response.ok ) {
-				throw new Error( `HTTP ${ response.status }` );
+				throw await restErrorFromResponse( response );
 			}
 			const data = ( await response.json() ) as {
 				enabled: boolean;
@@ -4473,6 +4580,7 @@ function init(): void {
 		'desktop-mode/shell-toast',
 		( payload: {
 			message?: string;
+			type?: string;
 			action?: { label: string; onClick: () => void };
 			duration?: number;
 		} ) => {
@@ -4481,6 +4589,7 @@ function init(): void {
 			}
 			showToast( {
 				message: payload.message,
+				type: typeof payload.type === 'string' ? payload.type : undefined,
 				action: payload.action,
 				duration: payload.duration,
 			} );
@@ -4993,8 +5102,8 @@ function init(): void {
 		hasNotes: Boolean( config.hasNotes ),
 		host: desktopArea,
 		config,
-		onError: ( message ) => {
-			showToast( { message } );
+		onError: ( toast ) => {
+			showToast( toast );
 		},
 	} );
 
@@ -5041,8 +5150,9 @@ function init(): void {
 	// per-window update nag (suppressed inside windows server-side).
 	// Async (resolves art from wordpress.org); fire-and-forget. Reuses
 	// the in-shell link open path so "Update now" lands on the update
-	// screen as a window.
-	void maybeShowUpdate( {
+	// screen as a window. The promise is kept for the shell tour, which
+	// stands down for a boot the notice actually took.
+	const updateNoticeShown = maybeShowUpdate( {
 		update: config.coreUpdate,
 		openUrl: ( { url, title } ) => {
 			if ( tryNativeUrlRemap( url ) ) {
@@ -5089,6 +5199,95 @@ function init(): void {
 	// announcement. Fire-and-forget: it sleeps until the desk has
 	// settled before mounting, which boot should not block on.
 	void maybeShowRebrandNotice( { config } );
+	// The first-boot tour: five coachmarks (where the menus are, how to
+	// change the layout, then open a window, snap it, press ⌘K) on a
+	// user's first boot, and on demand after that
+	// ("Take the tour", "Reset what's-new dialogs"). Steps advance on
+	// the real events; the shell only lends the tour its own
+	// entry points so the lazy bundle never reads shell module state.
+	let tourMioSpot: { x: number; y: number } | null = null;
+	installShellTour( {
+		config,
+		windowManager: manager,
+		isMobile: () => modeController.api.isMobile(),
+		updateNoticeShown,
+		openPalette: () => openPaletteOnly( 'desktop-mode-ai-assistant' ),
+		openLayoutSettings: () => {
+			// Asked BEFORE opening: the tour closes what it opened when it
+			// ends, and a Preferences window the user already had is not
+			// the tour's to close.
+			const wasAlreadyOpen = !! manager.getById( OS_SETTINGS_WINDOW_ID );
+			openOsSettings( { tabId: 'appearance' } );
+			revealSettingsSection( LAYOUT_SECTION_ID );
+			return { windowId: OS_SETTINGS_WINDOW_ID, wasAlreadyOpen };
+		},
+		// Where the layout settings are, right now: the Desktop layout
+		// section once Preferences is showing it, and before that the
+		// System tile, which is the dock's route to Preferences. Null
+		// when neither is on screen (a user may hide the tile), and the
+		// tour falls back to the rail.
+		findLayoutTarget: () =>
+			visibleSettingsSection( LAYOUT_SECTION_ID ) ??
+			document.querySelector(
+				`.os-dock__item[data-system-id="${ SYSTEM_TILE_ID }"]`,
+			),
+		closeWindow: ( id: string ) => manager.getById( id )?.close(),
+		closePalette: () => {
+			const palette = listPalettes().find(
+				( p ) => p.id === 'desktop-mode-ai-assistant',
+			);
+			if ( palette?.isOpen() ) {
+				palette.close();
+				notifyPaletteVisibility( palette.id, false );
+			}
+		},
+		// Mío walks the tour, summoned for it: on screen without touching
+		// the user's saved preference, and handed back to that preference
+		// when the tour ends. Not on a phone, where Mío never boots.
+		mio: {
+			size: () =>
+				modeController.api.isMobile() ? 0 : mioApi.getConfig().appearance.radius * 2,
+			summon: () => {
+				// The bundle loads on a first summon, so Mío arrives after
+				// the first card; send it to wherever the tour has asked
+				// for by then.
+				void mio.summon().then( () => mio.setAnchor( tourMioSpot ) );
+			},
+			follow: ( spot ) => {
+				tourMioSpot = spot;
+				mio.setAnchor( spot );
+			},
+			release: () => {
+				tourMioSpot = null;
+				mio.setAnchor( null );
+				mio.dismiss();
+			},
+		},
+		refreshDesktopIcons: spendMenuRefresh,
+		// The assistant is a modal with a full-screen backdrop, so its
+		// root element would be an anchor with no room beside it: the
+		// visible box is the panel inside.
+		findAssistant: () =>
+			document.querySelector(
+				'#desktop-mode-ai-assistant:not([hidden]) .os-ai__panel',
+			),
+		openFallbackWindow: () => {
+			const url = `${ config.adminUrl }edit.php`;
+			const id = deriveWindowId( url, config.adminUrl );
+			void manager.open( {
+				id,
+				baseId: id,
+				url,
+				title: __( 'Posts' ),
+				icon: 'dashicons-admin-post',
+			} );
+		},
+	} );
+	// Ask a user who has had OpenStation on for a while whether they
+	// have two minutes to say how it is going. A small prompt, once,
+	// whatever they answer; no-op unless the server put
+	// `usageFeedback` in the config.
+	void maybeAskForUsageFeedback( { config } );
 	if ( typeof config.filesUrl === 'string' && config.filesUrl ) {
 		filesRest.installRestDeps( {
 			baseUrl: config.filesUrl,
