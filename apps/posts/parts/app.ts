@@ -340,6 +340,7 @@ export function createPostsApp( id: string, options: PostsAppOptions = {} ) {
 					( ids ) => ctx.dispatch( 'trash', { ids } ),
 					( ids ) => ctx.dispatch( 'restore', { ids } ),
 				),
+				mode,
 			);
 		}
 		const isTrash = ctx.state.status === 'trash';
