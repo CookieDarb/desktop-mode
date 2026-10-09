@@ -19,7 +19,11 @@ import { getSyntheticIframe } from './../connection';
 import { HOOKS, applyFilters, doAction } from './../hooks';
 import { isMobileStamped } from '../mode/stamp';
 import { workAreaRectOf } from '../work-area';
+import { snapHalfRect } from '../window-manager/geometry';
 import { __, _x, sprintf } from './../i18n';
+import { copyText } from '../app-runtime/clipboard';
+import { nativeShareableUrl, shareableUrl } from './share-link';
+import { focusIsFromUser } from './focus-intent';
 import { attachTooltip } from '../ui/components/os-tooltip/os-tooltip';
 import {
 	addParentSubscriber,
@@ -129,6 +133,7 @@ import {
 import type { PanelTabEntry } from './tabs';
 import {
 	closeActionsMenu,
+	confirmCopyInMenu,
 	describeActionsMenu,
 	flipMenuItemCheckOptimistically,
 	openActionsMenu,
@@ -138,6 +143,7 @@ import {
 import { handleDragStart, handleResizeStart } from './pointer';
 import { navigateWithUnsavedGuard } from './unsaved-guard';
 import { speculateDocument } from '../pwa/speculate';
+import { resolveNativeUrlRemapTarget } from '../native-url-remap';
 
 /**
  * Ask the service worker to fetch a submenu tab's screen ahead of the
@@ -147,6 +153,11 @@ import { speculateDocument } from '../pwa/speculate';
  * worker matches exactly, and a tab's raw `data-url` is missing the
  * chromeless flag `withChromelessParam()` adds on navigation.
  *
+ * A tab a native window claims never loads in this iframe: the click
+ * opens that window instead (`handleTabStripClick()` consults the remap
+ * registry first). So it warms that window, with the params the click
+ * will open it with, the same warm the dock gives a remapped tile.
+ *
  * @param rawUrl The tab's declared admin URL.
  */
 function speculateTabDocument( rawUrl: string ): void {
@@ -155,11 +166,22 @@ function speculateTabDocument( rawUrl: string ): void {
 			wp?: {
 				os?: {
 					getOsSettings?: () => { windowPrewarmEnabled?: boolean };
+					prewarmWindow?: (
+						id: string,
+						opts?: { params?: Record< string, string | number | boolean > },
+					) => Promise< boolean >;
 				};
 			};
 		}
 	).wp?.os;
 	if ( ! os?.getOsSettings?.().windowPrewarmEnabled ) {
+		return;
+	}
+	const native = resolveNativeUrlRemapTarget( rawUrl );
+	if ( native ) {
+		void ( native.params
+			? os.prewarmWindow?.( native.id, { params: native.params } )
+			: os.prewarmWindow?.( native.id ) );
 		return;
 	}
 	const target = withChromelessParam( rawUrl );
@@ -221,6 +243,14 @@ export class Window {
 	 * @internal
 	 */
 	public _hasExplicitTitle = false;
+
+	/**
+	 * The URL the page in the frame reported for itself, and the
+	 * frame's `src` when it did. See {@link getCurrentUrl}.
+	 *
+	 * @internal
+	 */
+	public _reportedLocation: { url: string; src: string } | null = null;
 
 	/** @internal */
 	public _titleBar: HTMLElement;
@@ -631,6 +661,16 @@ export class Window {
 	 */
 	public snapConfigProvider:
 		| ( () => { enabled: boolean; cellWidth: number; cellHeight: number } )
+		| null = null;
+
+	/**
+	 * Resolver for the minimum width the other half of a split needs:
+	 * the widest `minWidth` among the windows snapped to the side
+	 * opposite `zone`. Wired by the window-manager; without it a snap
+	 * assumes the other side is empty.
+	 */
+	public snapPartnerMinWidthProvider:
+		| ( ( zone: 'left' | 'right' ) => number )
 		| null = null;
 
 	/**
@@ -1163,6 +1203,10 @@ export class Window {
 	 * falling back to the iframe's src attribute for cases where the
 	 * content document isn't yet reachable (cross-origin edge, early
 	 * load).
+	 *
+	 * A same-origin page sent with `Document-Isolation-Policy` (the
+	 * block editor, Elementor's editor) can't be read either; its own
+	 * report beats `src` until the frame is pointed elsewhere.
 	 */
 	public getCurrentUrl(): string {
 		if ( ! this.iframe ) {
@@ -1178,7 +1222,10 @@ export class Window {
 				return href;
 			}
 		} catch {
-			/* Cross-origin read rejected — fall through. */
+			const reported = this._reportedLocation;
+			if ( reported && reported.src === this.iframe.src ) {
+				return reported.url;
+			}
 		}
 		return this.iframe.src;
 	}
@@ -1205,8 +1252,13 @@ export class Window {
 		// session). Does NOT cover mouse clicks inside the iframe —
 		// those are handled by the shell-level window.blur listener
 		// that inspects document.activeElement.
-		this.element.addEventListener( 'focusin', () => {
+		this.element.addEventListener( 'focusin', ( e: FocusEvent ) => {
 			if ( this.element.classList.contains( 'os-window--overview' ) ) {
+				return;
+			}
+			// A page that focused itself while loading did not pick
+			// this window; see `focus-intent.ts`.
+			if ( ( e.target as Element | null )?.tagName === 'IFRAME' && ! focusIsFromUser() ) {
 				return;
 			}
 			this.onFocusRequest?.( this );
@@ -1288,6 +1340,19 @@ export class Window {
 					e.stopPropagation();
 					closeActionsMenu( this );
 					this.onOpenInNewWindow?.( this );
+				} );
+			}
+			const copyLink = menuPanel.querySelector(
+				'.os-window__menu-item--copy-link',
+			);
+			if ( copyLink ) {
+				copyLink.addEventListener( 'os-menu-item-click', ( e: Event ) => {
+					// The menu stays open: the row itself says "Link
+					// copied", then the menu closes on its own.
+					e.stopPropagation();
+					void this.copyLink().then( ( copied ) =>
+						confirmCopyInMenu( this, copyLink as HTMLElement, copied ),
+					);
 				} );
 			}
 			// "Reload" + "Open in classic wp-admin" moved here from the
@@ -1451,7 +1516,7 @@ export class Window {
 				// list the user had just acted on could come back
 				// stale. There is nothing to warm here: the document is
 				// already in the iframe.
-				if ( tab?.classList.contains( 'is-active' ) ) {
+				if ( tab?.classList.contains( 'os-window__tab--active' ) ) {
 					return;
 				}
 				// Require a dwell. `pointerover` fires on every crossing
@@ -1876,8 +1941,15 @@ export class Window {
 		if ( ! parent ) {
 			return false;
 		}
-		const area = workAreaRectOf( parent );
-		const halfW = Math.floor( area.width / 2 );
+		// Half the work area, moved off the middle for minimum widths:
+		// this window never goes below its own, and leaves the window
+		// snapped across from it its own.
+		const rect = snapHalfRect(
+			workAreaRectOf( parent ),
+			zone,
+			this.config.minWidth || 0,
+			this.snapPartnerMinWidthProvider?.( zone ) ?? 0,
+		);
 		this.element.classList.remove(
 			'os-window--maximized',
 			'os-window--fullscreen',
@@ -1885,10 +1957,10 @@ export class Window {
 			'os-window--snapped-right',
 		);
 		this.element.classList.add( `os-window--snapped-${ zone }` );
-		this.element.style.left = `${ zone === 'left' ? area.x : area.x + area.width - halfW }px`;
-		this.element.style.top = `${ area.y }px`;
-		this.element.style.width = `${ halfW }px`;
-		this.element.style.height = `${ area.height }px`;
+		this.element.style.left = `${ rect.x }px`;
+		this.element.style.top = `${ rect.y }px`;
+		this.element.style.width = `${ rect.width }px`;
+		this.element.style.height = `${ rect.height }px`;
 		return true;
 	}
 
@@ -2803,6 +2875,31 @@ export class Window {
 	}
 
 	/**
+	 * The link "Copy link" would hand out right now, or `''` when this
+	 * window shows nothing anyone else could open. An iframe window
+	 * shares its page; a native one shares the admin page embedded in
+	 * it, or the screen its visible tab stands for (see `share-link.ts`).
+	 */
+	public shareableLink(): string {
+		return this.config.native
+			? nativeShareableUrl( this, INITIAL_ORIGIN )
+			: shareableUrl( this.getCurrentUrl(), INITIAL_ORIGIN );
+	}
+
+	/**
+	 * Put a shareable link to the page this window shows on the
+	 * clipboard. The URL is read now, so a window that navigated since
+	 * it opened shares where it is. The ⋯ menu's row confirms it (see
+	 * `confirmCopyInMenu()`).
+	 *
+	 * Resolves whether the link was copied.
+	 */
+	public async copyLink(): Promise< boolean > {
+		const link = this.shareableLink();
+		return link !== '' && copyText( link );
+	}
+
+	/**
 	 * Open the window's current URL in a new browser tab as classic
 	 * wp-admin.
 	 *
@@ -2810,9 +2907,8 @@ export class Window {
 	 * `desktop_mode_portal` flag, and tags the URL with
 	 * `desktop_mode_classic=1` so the server-side admin_init redirect
 	 * (which otherwise forwards plain admin URLs to `/openstation/`)
-	 * lets the request through. The tag only has to survive the first
-	 * request; once the browser renders the page, the user's in-tab
-	 * navigation returns to normal admin flow.
+	 * lets the request through. Navigations inside that tab keep the
+	 * tag, so the user stays in classic wp-admin.
 	 *
 	 * The desktop window itself stays open — detach is a branch, not
 	 * a move. If the user wants to close it afterwards, they can.
