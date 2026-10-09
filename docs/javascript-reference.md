@@ -1111,6 +1111,7 @@ Calling `open()` with an id (or `baseId`) that's already on screen focuses the e
 - **"Open on startup"** — checkable; toggles this window as the user's default-window preference. Both window types.
 - **"Open another <Page>"** — only when the window was opened with `multi: true`. Calls `openNew()` with the window's *original* landing URL.
 - **"Open in new window"** — iframe windows only. Opens a fresh sibling window seeded with the *current* iframe URL (post in-window navigation). Useful when the user has drilled into a sub-page (e.g. editing a specific post) and wants to peel a copy off without losing their place. The new window cascades and uses the same multi-instance id suffixing as `openNew()`.
+- **"Copy link"** — iframe windows only. Copies the page's own wp-admin URL, read at click time and stripped of the shell's flags and nonces, so whoever opens it lands on the same screen: as a window if they use OpenStation, as the classic page if they don't, and through the page's own capability check either way. The row confirms in place ("Link copied" with a tick) for about a second; the menu then closes unless the pointer is still on it. `Window.copyLink()` does the copy without the menu and resolves whether it worked.
 - **"Reload"** — both window types; see below.
 - **"Open in classic wp-admin"** — iframe windows only. Strips the chromeless flags and hands the page to a classic admin tab, where navigation stays classic until the user switches back to OpenStation. A native window has no URL to hand off.
 
@@ -4712,6 +4713,15 @@ Posted from the **head** of every chromeless document, before the body renders. 
 It exists because `os-ready` is too late for one job. The bridge bundle is enqueued on `admin_footer`, so it runs after every other admin script in the document — a second or more after the browser painted the content on a page with a heavy plugin set. Fine for "the bridge is wired up", wrong for "your save went through" (see the form-submit note under [`os-iframe-activity`](#os-iframe-activity--experimental)). The parent ignores it unless the window has a submit waiting or a frame it cannot read, and clears the explicit-title flag so a subsequent `adoptPageTitle()` call can adopt the new page's own name.
 
 `url` is the document's own `location.href`, for the frames the parent cannot read: a document sent with `Document-Isolation-Policy` (WordPress sends it on the block editor in Chromium) is cross-origin to the shell, so a Revisions window that restores into the editor hands off from this URL instead (see [Screens that hand off when they're done](bridge-protocol.md#screens-that-hand-off-when-theyre-done)).
+
+#### `os-iframe-location` — Experimental
+Posted by the same head script whenever the document changes its own address without navigating: every `history.pushState()` / `history.replaceState()` call, and every `popstate`. The block editor's first save is the case that matters: it turns `post-new.php` into `post.php?post=N&action=edit` in place.
+
+```typescript
+{ type: 'os-iframe-location', url: string }
+```
+
+The parent only records `url` as where the frame now is, which is what `Window.getCurrentUrl()` returns for a frame it cannot read. Without it, "Copy link", "Open in new window", "Open in classic wp-admin" and the saved session would all go on naming the URL the document loaded on. It is not a navigation: it settles no submit and keeps the window's title.
 
 #### `os-focus-request` — Stable
 Posted by the chromeless bridge on every pointerdown inside the iframe. The parent focuses the window, unless it's currently in the overview grid (where clicks are absorbed by the grid controller).
