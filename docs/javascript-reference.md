@@ -3185,6 +3185,8 @@ The built-in content tools (`search_posts`, `search_pages`, `search_comments`, `
 
 Results are scoped to what the requesting user may read. The comment tools drop every comment whose parent post the caller cannot access (private, draft, or password-protected parents, and non-viewable post types), and `search_comments_by_post` returns an empty batch — without the parent title — when the target post itself is unreadable. As in Core's comments REST controller, this filtering happens per row after the query, so a batch can carry fewer items than `total` implies; treat `total` / `has_more` as pagination hints, not as an exact count of readable matches. The final `entity` record applies the same readability check to the model-chosen id, resolving unreadable entities to `null` exactly like nonexistent ones.
 
+`search_media` lists where a media item is used, and `find_unused_media` (Editors and Administrators) lists the items nothing on the site points at. Neither can delete anything.
+
 ```javascript
 const res = await wp.os.ai.ask( 'where do I manage categories?' );
 // res = { answer_type: 'navigation', message: '…', admin_links: [ … ], request_id: '…' }
