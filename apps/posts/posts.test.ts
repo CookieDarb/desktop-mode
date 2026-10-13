@@ -725,6 +725,18 @@ describe( 'the cells', () => {
 		const draft = buildTitleCell( row( 6, { status: 'draft', link: 'http://x.test/d' } ), env );
 		expect( pills( draft ) ).toEqual( [ 'Posts page', 'Draft' ] );
 		expect( draft.querySelector( 'a[target="_blank"]' ) ).toBeNull();
+
+		const postEnv = cellEnv( { extra: { mode: 'posts', editPostUrlBase: 'http://x.test/wp-admin/post.php' } } );
+		const publishedPost = buildTitleCell(
+			row( 7, {
+				title: { rendered: 'Published Story' },
+				link: 'http://x.test/published-story',
+				status: 'publish',
+			} ),
+			postEnv,
+		);
+		expect( publishedPost.querySelector( 'a[target="_blank"]' )?.textContent ).toBe( 'View' );
+		expect( publishedPost.querySelector( 'a[target="_blank"]' )?.getAttribute( 'href' ) ).toBe( 'http://x.test/published-story' );
 	} );
 
 	it( 'the author cell paints the name as text, and nothing for an author core could not embed', () => {

@@ -3403,7 +3403,7 @@ Default args:
 ```php
 [
     '_embed'  => 'author,wp:term,wp:featuredmedia',
-    '_fields' => 'id,title,status,date,date_gmt,modified,modified_gmt,author,categories,tags,comment_status,excerpt,openstation_lock,_links,_embedded',
+    '_fields' => 'id,title,status,date,date_gmt,modified,modified_gmt,author,categories,tags,comment_status,excerpt,openstation_lock,link,_links,_embedded',
 ]
 ```
 

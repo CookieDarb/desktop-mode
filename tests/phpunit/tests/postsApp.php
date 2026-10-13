@@ -200,7 +200,7 @@ class Tests_OpenStation_PostsApp extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'author', $args['_embed'] );
 		$this->assertStringContainsString( 'wp:term', $args['_embed'] );
 		$this->assertStringContainsString( 'wp:featuredmedia', $args['_embed'] );
-		foreach ( array( 'title', 'status', 'date', 'openstation_lock', '_embedded' ) as $field ) {
+		foreach ( array( 'title', 'status', 'date', 'openstation_lock', 'link', '_embedded' ) as $field ) {
 			$this->assertStringContainsString( $field, $args['_fields'] );
 		}
 	}
