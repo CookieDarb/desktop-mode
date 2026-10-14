@@ -25,15 +25,24 @@ class Tests_OpenStation_PulseMonitor extends WP_UnitTestCase {
 		openstation_pulse_reset();
 		delete_option( OPENSTATION_PULSE_LOG_OPTION );
 		delete_option( OPENSTATION_PULSE_LISTENERS_OPTION );
+		delete_option( OPENSTATION_PULSE_GATE_OPTION );
 		delete_transient( 'health-check-site-status-result' );
 		wp_set_current_user( 0 );
+		// Most tests are about what a page view records; the opt-in that
+		// lets page views through has its own tests below.
+		add_filter( 'openstation_pulse_count_visitors', '__return_true' );
 	}
 
 	public function tear_down() {
 		openstation_pulse_reset();
 		delete_option( OPENSTATION_PULSE_LOG_OPTION );
 		delete_option( OPENSTATION_PULSE_LISTENERS_OPTION );
+		delete_option( OPENSTATION_PULSE_GATE_OPTION );
+		delete_option( OPENSTATION_EXTENDED_OPTIONS_KEY );
 		delete_transient( 'health-check-site-status-result' );
+		wp_cache_delete( 'log', OPENSTATION_PULSE_CACHE_GROUP );
+		wp_cache_delete( 'gate', OPENSTATION_PULSE_CACHE_GROUP );
+		remove_all_filters( 'openstation_pulse_count_visitors' );
 		remove_all_filters( 'openstation_pulse_event' );
 		remove_all_filters( 'openstation_pulse_request_kind' );
 		remove_all_filters( 'openstation_pulse_capability' );
@@ -281,6 +290,73 @@ class Tests_OpenStation_PulseMonitor extends WP_UnitTestCase {
 	}
 
 	/* ---------------------------------------------------------------------
+	 * Front-end cost
+	 * ------------------------------------------------------------------- */
+
+	/**
+	 * @covers ::openstation_pulse_on_shutdown
+	 * @covers ::openstation_pulse_counts_visitors
+	 */
+	public function test_page_views_are_not_counted_by_default() {
+		remove_all_filters( 'openstation_pulse_count_visitors' );
+		$this->listen_as( self::$admin_id );
+		$_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Safari/605.1.15';
+		openstation_pulse_on_shutdown();
+
+		$this->assertFalse( openstation_pulse_counts_visitors() );
+		$this->assertFalse( get_option( OPENSTATION_PULSE_LOG_OPTION ), 'A page view writes nothing.' );
+		$this->assertFalse( get_option( OPENSTATION_PULSE_GATE_OPTION ) );
+
+		openstation_save_extended_options( array( 'pulse_visitors' => true ) );
+		openstation_pulse_on_shutdown();
+		$this->assertSame( array( 'visitors' ), wp_list_pluck( $this->log_entries(), 'kind' ), 'The extended option turns them on.' );
+	}
+
+	/**
+	 * @covers ::openstation_pulse_on_shutdown
+	 * @covers ::openstation_pulse_claim_write
+	 */
+	public function test_ordinary_traffic_writes_at_most_once_per_interval() {
+		$this->listen_as( self::$admin_id );
+		openstation_pulse_on_shutdown();
+		openstation_pulse_on_shutdown();
+		$this->assertCount( 1, $this->log_entries(), 'The second page view inside the interval is sampled out.' );
+
+		do_action( 'wp_login_failed', 'nobody', new WP_Error() );
+		openstation_pulse_on_shutdown();
+		$this->assertCount( 1, $this->log_entries(), 'Failures are sampled too: a login attack is not a write per attempt.' );
+
+		openstation_pulse_record( 'comments' );
+		openstation_pulse_on_shutdown();
+		$this->assertSame( array( 'bots', 'comments' ), wp_list_pluck( $this->log_entries(), 'kind' ), 'A comment always writes.' );
+
+		update_option( OPENSTATION_PULSE_GATE_OPTION, (int) round( microtime( true ) * 1000 ) - OPENSTATION_PULSE_WRITE_INTERVAL_MS - 1 );
+		openstation_pulse_on_shutdown();
+		$this->assertCount( 3, $this->log_entries(), 'The next interval writes again.' );
+	}
+
+	/**
+	 * @covers ::openstation_pulse_append
+	 * @covers ::openstation_pulse_read_log
+	 */
+	public function test_object_cache_keeps_the_log_out_of_the_database() {
+		$was = wp_using_ext_object_cache( true );
+		try {
+			$this->listen_as( self::$admin_id );
+			openstation_pulse_on_shutdown();
+			openstation_pulse_on_shutdown();
+
+			$this->assertFalse( get_option( OPENSTATION_PULSE_LOG_OPTION ) );
+			$this->assertFalse( get_option( OPENSTATION_PULSE_GATE_OPTION ), 'The gate lives in the cache too.' );
+			$log = openstation_pulse_read_log( (int) round( microtime( true ) * 1000 ) );
+			$this->assertSame( 1, $log['seq'], 'The cache gate samples the second page view out.' );
+			$this->assertCount( 1, $log['entries'] );
+		} finally {
+			wp_using_ext_object_cache( (bool) $was ); // Passing null would leave it on.
+		}
+	}
+
+	/* ---------------------------------------------------------------------
 	 * Heartbeat relay
 	 * ------------------------------------------------------------------- */
 
@@ -440,7 +516,7 @@ class Tests_OpenStation_PulseMonitor extends WP_UnitTestCase {
 		$this->assertTrue( wp_script_is( 'os-pulse-monitor', 'registered' ) );
 		$this->assertContains( 'heartbeat', wp_scripts()->registered['os-pulse-monitor']->deps );
 		$this->assertSame( 10, has_filter( 'heartbeat_received', 'openstation_pulse_heartbeat_received' ) );
-		$this->assertSame( 10, has_action( 'shutdown', 'openstation_pulse_on_shutdown' ) );
+		$this->assertSame( PHP_INT_MAX, has_action( 'shutdown', 'openstation_pulse_on_shutdown' ), 'Last, so closing the response cuts nobody short.' );
 	}
 
 	/**
