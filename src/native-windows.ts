@@ -31,9 +31,8 @@ import { registerSyntheticIframe } from './connection';
 import { isShellDocumentUrl } from './shell-url';
 import { recordFrameLocation, setWindowMenuPages } from './window/share-link';
 import {
-	OS_TAB_PARAM,
 	registerNativeUrlRemap,
-	resolveNativeUrlRemap,
+	resolveNativeUrlRemapTarget,
 	tryNativeUrlRemap,
 	unregisterNativeUrlRemap,
 } from './native-url-remap';
@@ -616,39 +615,24 @@ function buildIframeContentRender(
 				typeof ( data as { url?: string } ).url === 'string' &&
 				( data as { url: string } ).url !== ''
 			) {
+				if ( e.origin !== window.location.origin ) {
+					return;
+				}
 				const linkUrl = ( data as { url: string } ).url;
 
-				// Switch tab in place when the link targets this same native window
-				// (e.g. Gutenberg's "View Posts" / "View Pages" button).
-				const targetNativeId = resolveNativeUrlRemap( linkUrl );
-				if ( targetNativeId === windowId ) {
-					let targetTab = 'posts';
-					try {
-						const parsed = new URL( linkUrl, window.location.origin );
-						const tagged = parsed.searchParams.get( OS_TAB_PARAM );
-						if ( tagged && /^[a-z0-9_-]+$/.test( tagged ) ) {
-							targetTab = tagged;
-						}
-					} catch {
-						/* Use fallback default 'posts' */
-					}
-
-					const root =
-						body.closest( '.os-app-list' ) ??
-						body.closest( '[data-window-id]' ) ??
-						body.parentElement;
-					const tabs = root?.querySelector< HTMLElement & { value: string } >( 'os-tabs' );
-					if ( tabs ) {
-						tabs.value = targetTab;
-						tabs.dispatchEvent(
-							new CustomEvent( 'os-tab-change', {
-								detail: { value: targetTab },
-								bubbles: true,
-								composed: true,
-							} ),
-						);
-						return;
-					}
+				// Switch tab via host app callback when the link targets this same
+				// native window (e.g. Gutenberg's "View Posts" / "View Pages" button).
+				const win = window.wp?.os?.windowManager?.getById?.( windowId );
+				const baseId = win?.config?.baseId || registeredId;
+				const target = resolveNativeUrlRemapTarget( linkUrl );
+				const tab = target?.params?.tab;
+				if (
+					target?.id === baseId &&
+					typeof tab === 'string' &&
+					cfg.onAdminLink?.( linkUrl, tab )
+				) {
+					cfg.onMessage?.( e.data );
+					return;
 				}
 
 				// Delegate to another native window if registered.
@@ -735,11 +719,13 @@ function buildIframeContentRender(
  * cross-origin URL, or the shell screen, mounts nothing and returns
  * a no-op.
  *
- * @param host          Element to mount into. Its contents are replaced.
- * @param url           Admin URL. The chromeless flag is added here.
- * @param opts          Mount options.
- * @param opts.windowId Fallback for a host that is not inside a window
- *                      root yet; normally resolved from the DOM.
+ * @param host             Element to mount into. Its contents are replaced.
+ * @param url              Admin URL. The chromeless flag is added here.
+ * @param opts             Mount options.
+ * @param opts.windowId    Fallback for a host that is not inside a window
+ *                         root yet; normally resolved from the DOM.
+ * @param opts.onAdminLink Optional callback for in-iframe admin links that
+ *                         remap to this window. Return true if handled.
  * @return Teardown: removes the listeners, the synthetic-iframe
  *         registration and the iframe itself.
  * @public
@@ -747,7 +733,10 @@ function buildIframeContentRender(
 export function embedAdminPage(
 	host: HTMLElement,
 	url: string,
-	opts: { windowId?: string } = {},
+	opts: {
+		windowId?: string;
+		onAdminLink?: ( linkUrl: string, tab: string ) => boolean;
+	} = {},
 ): () => void {
 	let chromeless: string;
 	try {
@@ -767,9 +756,11 @@ export function embedAdminPage(
 	host.replaceChildren();
 	const cleanups: ( () => void )[] = [];
 	const windowId = resolveMountedWindowId( host, opts.windowId ?? '' );
-	const ready = buildIframeContentRender( { url: chromeless }, cleanups, windowId )(
-		host,
-	);
+	const ready = buildIframeContentRender(
+		{ url: chromeless, onAdminLink: opts.onAdminLink },
+		cleanups,
+		windowId,
+	)( host );
 
 	// Styled inline, the way the iframe above is: a class of ours in
 	// someone else's body is a selector they never agreed to. The
