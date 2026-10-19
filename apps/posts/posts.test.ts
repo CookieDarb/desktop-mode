@@ -566,6 +566,28 @@ describe( 'the bulk bar', () => {
 		expect( Array.from( table().selection ?? [] ) ).toEqual( [] );
 	} );
 
+	it( 'stays busy while the trash runs, and a second click sends nothing', async () => {
+		const { ctx, root, dispatch, table } = mount();
+		app.mounted( ctx );
+		let land: ( ok: boolean ) => void = () => undefined;
+		dispatch.mockImplementationOnce( () => new Promise< boolean >( ( resolve ) => {
+			land = resolve;
+		} ) );
+		table().selection = [ 1, 2 ];
+		table().dispatchEvent( new CustomEvent( 'os-table-selection-change' ) );
+		const button = () => root.querySelector( '[data-os-posts-bulk-action="trash"]' ) as HTMLElement;
+		button().click();
+		await flush();
+		expect( button().hasAttribute( 'busy' ) ).toBe( true );
+		button().click();
+		await flush();
+		expect( ctx.host.confirm ).toHaveBeenCalledTimes( 1 );
+		expect( dispatch ).toHaveBeenCalledTimes( 1 );
+		land( true );
+		await flush();
+		expect( button().hasAttribute( 'busy' ) ).toBe( false );
+	} );
+
 	it( 'runBulkAction confirms, tolerates a throwing runner, and refreshes unless the runner opts out', async () => {
 		const { ctx } = mount();
 		const clearSelection = vi.fn();
@@ -621,7 +643,7 @@ describe( 'the registries', () => {
 		expect( resolveStatusSegments() ).toHaveLength( 6 );
 	} );
 
-	it( 'the trash bulk action pluralises per mode, skips trashed rows and opts out of the auto-refresh', async () => {
+	it( 'the trash bulk action pluralises per mode, skips trashed rows, keeps rows selected under another query and opts out of the auto-refresh', async () => {
 		const trash = vi.fn( async () => true );
 		const [ action ] = defaultBulkActions( 'posts', trash );
 		expect( typeof action.confirm === 'function' && action.confirm( 1 ) ).toBe( 'Move 1 post to the trash?' );
@@ -629,13 +651,26 @@ describe( 'the registries', () => {
 		const [ pages ] = defaultBulkActions( 'pages', trash );
 		expect( typeof pages.confirm === 'function' && pages.confirm( 2 ) ).toBe( 'Move 2 pages to the trash?' );
 		const clearSelection = vi.fn();
-		const result = await action.run( [ 1, 2 ], {
+		// Row 3 was selected under an earlier search: not loaded, still sent.
+		const result = await action.run( [ 1, 2, 3 ], {
 			table: { data: [ row( 1 ), row( 2, { status: 'trash' } ) ], clearSelection } as never,
 		} as never );
-		expect( trash ).toHaveBeenCalledWith( [ 1 ] );
+		expect( trash ).toHaveBeenCalledWith( [ 1, 3 ] );
 		expect( clearSelection ).toHaveBeenCalled();
 		expect( result ).toBe( false );
 		expect( resolveBulkActions( [ action ], 'posts' ) ).toEqual( [ action ] );
+	} );
+
+	it( 'the restore bulk action skips loaded rows outside the trash and keeps rows selected under another query', async () => {
+		const restore = vi.fn( async () => true );
+		const [ , action ] = defaultBulkActions( 'posts', vi.fn(), restore );
+		const clearSelection = vi.fn();
+		const result = await action.run( [ 1, 2, 3 ], {
+			table: { data: [ row( 1 ), row( 2, { status: 'trash' } ) ], clearSelection } as never,
+		} as never );
+		expect( restore ).toHaveBeenCalledWith( [ 2, 3 ] );
+		expect( clearSelection ).toHaveBeenCalled();
+		expect( result ).toBe( false );
 	} );
 
 	it( 'hands the bulk-actions and columns filters the window mode, and a one-arg callback still works (#854)', () => {
@@ -739,6 +774,18 @@ describe( 'the cells', () => {
 		const draft = buildTitleCell( row( 6, { status: 'draft', link: 'http://x.test/d' } ), env );
 		expect( pills( draft ) ).toEqual( [ 'Posts page', 'Draft' ] );
 		expect( draft.querySelector( 'a[target="_blank"]' ) ).toBeNull();
+
+		const postEnv = cellEnv( { extra: { mode: 'posts', editPostUrlBase: 'http://x.test/wp-admin/post.php' } } );
+		const publishedPost = buildTitleCell(
+			row( 7, {
+				title: { rendered: 'Published Story' },
+				link: 'http://x.test/published-story',
+				status: 'publish',
+			} ),
+			postEnv,
+		);
+		expect( publishedPost.querySelector( 'a[target="_blank"]' )?.textContent ).toBe( 'View' );
+		expect( publishedPost.querySelector( 'a[target="_blank"]' )?.getAttribute( 'href' ) ).toBe( 'http://x.test/published-story' );
 	} );
 
 	it( 'the author cell paints the name as text, and nothing for an author core could not embed', () => {
@@ -929,16 +976,15 @@ describe( 'the writing desk', () => {
 		expect( root.ownerDocument.activeElement ).toBe( root.querySelector( '[data-inspect-id="2"]' ) );
 	} );
 
-	it( 'drops hidden selections when the server query changes and keeps details current', async () => {
+	it( 'preserves selections when the server query changes and keeps details current', async () => {
 		const { root, ctx, table } = mount();
 		root.querySelector( '[data-story-id="2"] os-checkbox' )!.dispatchEvent( new CustomEvent( 'os-checkbox-change', { detail: { checked: true } } ) );
 		ctx.state.search = 'Row 1';
 		( ctx as { data: ListData } ).data = data( [ row( 1 ) ] );
 		ctx.repaint();
 		await flush();
-		expect( Array.from( table().selection ?? [] ) ).toEqual( [] );
+		expect( Array.from( table().selection ?? [] ) ).toEqual( [ 2 ] );
 		expect( root.querySelectorAll( '[data-story-id]' ) ).toHaveLength( 1 );
-		expect( root.querySelector( '[data-os-posts-bulk]' )?.hasAttribute( 'hidden' ) ).toBe( true );
 	} );
 
 	it( 'sorts through the existing server action', () => {

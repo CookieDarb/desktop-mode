@@ -99,6 +99,7 @@ interface UiState {
 	hidden: Set< string > | null;
 	selected: number;
 	bulkActions: BulkAction[] | null;
+	bulkRunning: string;
 	extras: HTMLElement[] | null;
 	postsCtx: PostsWindowContext | null;
 	tab: string;
@@ -127,6 +128,7 @@ const freshUi = (): UiState => ( {
 	hidden: null,
 	selected: 0,
 	bulkActions: null,
+	bulkRunning: '',
 	extras: null,
 	postsCtx: null,
 	tab: 'posts',
@@ -365,7 +367,18 @@ export function createPostsApp( id: string, options: PostsAppOptions = {} ) {
 					( action ) => html`<os-button
 						variant=${ action.variant ?? 'secondary' }
 						data-os-posts-bulk-action=${ action.id }
-						@click=${ () => void runBulkAction( ctx, action, postsContext( ctx, ui ) ) }
+						?busy=${ ui.bulkRunning === action.id }
+						?disabled=${ ui.bulkRunning !== '' }
+						@click=${ () => {
+							if ( ui.bulkRunning ) {
+								return;
+							}
+							void runBulkAction( ctx, action, postsContext( ctx, ui ), ( running ) => {
+								ui.bulkRunning = running ? action.id : '';
+								ctx.root.toggleAttribute( 'data-os-posts-bulk-running', running );
+								ctx.repaint();
+							} );
+						} }
 					>${ action.icon ? html`<span class="dashicons ${ action.icon }" aria-hidden="true"></span>` : '' } ${ action.label }</os-button>`,
 				) }</span>
 			</div>
@@ -813,7 +826,7 @@ export function createPostsApp( id: string, options: PostsAppOptions = {} ) {
 			const ui = ctx.ui( freshUi );
 			ui.stats?.sync();
 			ui.feed.observe( ctx.root );
-			const { state, data } = ctx;
+			const { data } = ctx;
 			const env = cellEnv( ctx, ui, cells );
 			// The columns rebuild when the hidden set or the filter options
 			// change (the phone crossing is the sync's own concern).
@@ -829,7 +842,6 @@ export function createPostsApp( id: string, options: PostsAppOptions = {} ) {
 				// its setter, which is the one the component declares.
 				table: table as unknown as ListTableLike< PostListItem >,
 				rows: items,
-				listKey: [ state.perPage, state.search, state.status, state.orderby, state.order, state.author.join( ',' ), state.tag.join( ',' ) ].join( '|' ),
 				fingerprint: fingerprint( items ),
 				columns: ( phone ) => {
 					ui.cellCache.clear();
