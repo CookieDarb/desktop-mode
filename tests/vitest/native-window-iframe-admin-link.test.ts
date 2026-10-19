@@ -20,6 +20,7 @@ describe( 'native windows — in-iframe admin link navigation', () => {
 	let host: HTMLElement;
 	let iframe: HTMLIFrameElement;
 	let teardown: () => void;
+	let onAdminLinkMock: ReturnType< typeof vi.fn >;
 
 	const postFromIframe = ( payload: unknown ) => {
 		const ev = new MessageEvent( 'message', {
@@ -53,10 +54,18 @@ describe( 'native windows — in-iframe admin link navigation', () => {
 		container.appendChild( host );
 		document.body.appendChild( container );
 
+		onAdminLinkMock = vi.fn( ( _url: string, tab: string ) => {
+			tabs.value = tab;
+			return true;
+		} );
+
 		teardown = embedAdminPage(
 			host,
 			`${ window.location.origin }/wp-admin/post-new.php`,
-			{ windowId: 'desktop-mode-posts' },
+			{
+				windowId: 'desktop-mode-posts',
+				onAdminLink: onAdminLinkMock,
+			},
 		);
 		iframe = host.querySelector( 'iframe' )!;
 	} );
@@ -68,33 +77,107 @@ describe( 'native windows — in-iframe admin link navigation', () => {
 		delete ( window as unknown as { wp?: unknown } ).wp;
 	} );
 
-	test( 'switches tab in place and dispatches os-tab-change (respecting os_tab)', () => {
+	test( 'calls onAdminLink callback when link remaps to this native window', () => {
 		registerNativeUrlRemap( {
 			id: 'desktop-mode-posts',
 			nativeWindowId: 'desktop-mode-posts',
 			matches: ( _url, parsed ) => parsed.pathname.endsWith( '/edit.php' ),
+			params: ( _url, parsed ) => {
+				const tagged = parsed.searchParams.get( 'os_tab' );
+				return tagged ? { tab: tagged } : { tab: 'posts' };
+			},
 		} );
 
-		let tabChangeValue = '';
-		tabs.addEventListener( 'os-tab-change', ( ( e: CustomEvent ) => {
-			tabChangeValue = e.detail?.value;
-		} ) as EventListener );
+		// Cross-origin messages are ignored
+		const crossOriginEv = new MessageEvent( 'message', {
+			data: {
+				type: 'os-iframe-admin-link',
+				url: `${ window.location.origin }/wp-admin/edit.php`,
+			},
+			origin: 'https://evil.example.com',
+		} );
+		Object.defineProperty( crossOriginEv, 'source', {
+			value: iframe.contentWindow,
+			configurable: true,
+		} );
+		window.dispatchEvent( crossOriginEv );
+		expect( onAdminLinkMock ).not.toHaveBeenCalled();
 
-		// Default fallback tab 'posts' when no os_tab parameter is given
+		// Default mapped tab 'posts'
 		postFromIframe( {
 			type: 'os-iframe-admin-link',
 			url: `${ window.location.origin }/wp-admin/edit.php`,
 		} );
+		expect( onAdminLinkMock ).toHaveBeenCalledWith(
+			`${ window.location.origin }/wp-admin/edit.php`,
+			'posts',
+		);
 		expect( tabs.value ).toBe( 'posts' );
-		expect( tabChangeValue ).toBe( 'posts' );
 
-		// Custom os_tab parameter
+		// Specific tab mapped (e.g. categories)
 		postFromIframe( {
 			type: 'os-iframe-admin-link',
 			url: `${ window.location.origin }/wp-admin/edit.php?os_tab=categories`,
 		} );
+		expect( onAdminLinkMock ).toHaveBeenCalledWith(
+			`${ window.location.origin }/wp-admin/edit.php?os_tab=categories`,
+			'categories',
+		);
 		expect( tabs.value ).toBe( 'categories' );
-		expect( tabChangeValue ).toBe( 'categories' );
+	} );
+
+	test( 'matches remap on baseId for multi-instance windows (e.g. posts-2)', () => {
+		const secondHost = document.createElement( 'div' );
+		document.body.appendChild( secondHost );
+
+		const secondOnAdminLink = vi.fn( () => true );
+		( window as unknown as { wp?: unknown } ).wp = {
+			os: {
+				windowManager: {
+					getById: ( id: string ) =>
+						id === 'desktop-mode-posts-2'
+							? { config: { baseId: 'desktop-mode-posts' } }
+							: undefined,
+				},
+			},
+		};
+
+		const secondTeardown = embedAdminPage(
+			secondHost,
+			`${ window.location.origin }/wp-admin/post-new.php`,
+			{
+				windowId: 'desktop-mode-posts-2',
+				onAdminLink: secondOnAdminLink,
+			},
+		);
+
+		registerNativeUrlRemap( {
+			id: 'desktop-mode-posts',
+			nativeWindowId: 'desktop-mode-posts',
+			matches: ( _url, parsed ) => parsed.pathname.endsWith( '/edit.php' ),
+			params: () => ( { tab: 'posts' } ),
+		} );
+
+		const secondIframe = secondHost.querySelector( 'iframe' )!;
+		const ev = new MessageEvent( 'message', {
+			data: {
+				type: 'os-iframe-admin-link',
+				url: `${ window.location.origin }/wp-admin/edit.php`,
+			},
+			origin: window.location.origin,
+		} );
+		Object.defineProperty( ev, 'source', {
+			value: secondIframe.contentWindow,
+			configurable: true,
+		} );
+		window.dispatchEvent( ev );
+
+		expect( secondOnAdminLink ).toHaveBeenCalledWith(
+			`${ window.location.origin }/wp-admin/edit.php`,
+			'posts',
+		);
+		secondTeardown();
+		secondHost.remove();
 	} );
 
 	test( 'delegates to tryNativeUrlRemap when link targets another native window', () => {
