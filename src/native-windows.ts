@@ -532,6 +532,40 @@ function buildIframeContentRender(
 		// chromeless bridge's own message listener doesn't see this
 		// iframe (it sits inside a native window's body, not the
 		// shell-managed iframe).
+		/**
+		 * Route an admin link clicked inside the page: to the host app
+		 * when it points back at this window (the block editor's "View
+		 * Posts" / "View Pages"), to another native window when one is
+		 * registered for it, and to a plain iframe window otherwise.
+		 */
+		const routeAdminLink = ( linkUrl: string, linkLabel: string ): void => {
+			const win = window.wp?.os?.windowManager?.getById?.( windowId );
+			const baseId = win?.config?.baseId || registeredId;
+			const target = resolveNativeUrlRemapTarget( linkUrl );
+			const tab = target?.params?.tab;
+			if (
+				target?.id === baseId &&
+				typeof tab === 'string' &&
+				cfg.onAdminLink?.( linkUrl, tab )
+			) {
+				return;
+			}
+			if ( tryNativeUrlRemap( linkUrl ) ) {
+				return;
+			}
+			const osApi = window.wp?.os;
+			if ( osApi?.deriveWindowId && osApi?.windowManager ) {
+				const id = osApi.deriveWindowId( linkUrl );
+				void osApi.windowManager.open( {
+					id,
+					baseId: id,
+					url: linkUrl,
+					title: linkLabel || linkUrl,
+					icon: 'dashicons-admin-generic',
+				} );
+			}
+		};
+
 		const onMessage = ( e: MessageEvent ): void => {
 			if ( ! iframe.contentWindow || e.source !== iframe.contentWindow ) {
 				return;
@@ -607,55 +641,22 @@ function buildIframeContentRender(
 			// In-iframe admin link navigation from the synthetic iframe.
 			// Synthetic iframes in native window tabs lack the outer
 			// `Window.iframe` binding that routes through `handleWindowMessage`,
-			// so in-frame navigation events are handled here.
+			// so in-frame navigation events are handled here. Same-origin
+			// only, like the handlers above. The message still reaches
+			// `cfg.onMessage` below whichever way the link is routed.
 			if (
 				data &&
 				typeof data === 'object' &&
 				( data as { type?: string } ).type === 'os-iframe-admin-link' &&
 				typeof ( data as { url?: string } ).url === 'string' &&
-				( data as { url: string } ).url !== ''
+				( data as { url: string } ).url !== '' &&
+				e.origin === window.location.origin
 			) {
-				if ( e.origin !== window.location.origin ) {
-					return;
-				}
-				const linkUrl = ( data as { url: string } ).url;
-
-				// Switch tab via host app callback when the link targets this same
-				// native window (e.g. Gutenberg's "View Posts" / "View Pages" button).
-				const win = window.wp?.os?.windowManager?.getById?.( windowId );
-				const baseId = win?.config?.baseId || registeredId;
-				const target = resolveNativeUrlRemapTarget( linkUrl );
-				const tab = target?.params?.tab;
-				if (
-					target?.id === baseId &&
-					typeof tab === 'string' &&
-					cfg.onAdminLink?.( linkUrl, tab )
-				) {
-					cfg.onMessage?.( e.data );
-					return;
-				}
-
-				// Delegate to another native window if registered.
-				if ( tryNativeUrlRemap( linkUrl ) ) {
-					return;
-				}
-
-				// Fall back to opening a standard iframe window.
-				const osApi = window.wp?.os;
-				if ( osApi?.deriveWindowId && osApi?.windowManager ) {
-					const id = osApi.deriveWindowId( linkUrl );
-					const linkLabel =
-						typeof ( data as { label?: string } ).label === 'string'
-							? ( data as { label: string } ).label
-							: '';
-					void osApi.windowManager.open( {
-						id,
-						baseId: id,
-						url: linkUrl,
-						title: linkLabel || linkUrl,
-						icon: 'dashicons-admin-generic',
-					} );
-				}
+				const label = ( data as { label?: unknown } ).label;
+				routeAdminLink(
+					( data as { url: string } ).url,
+					typeof label === 'string' ? label : '',
+				);
 			}
 
 			try {
